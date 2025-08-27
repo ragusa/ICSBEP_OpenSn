@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+      =================================================================
+      Description: Water-reflected sphere of Plutonium Nitrate Solution
+      Case:        PU-SOL-THERM-002 Case 1
+      Written By:  Paul Romano
+      Date:        3/11/2014
+      =================================================================
+  -->
+
+  <run_mode>eigenvalue</run_mode>
+  <batches>3000</batches>
+  <inactive>20</inactive>
+  <particles>10000</particles>
+
+  <source>
+    <space type="point" parameters="0 0 0" />
+  </source>
+
+</settings>

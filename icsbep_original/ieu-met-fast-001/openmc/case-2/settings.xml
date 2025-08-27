@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+  ==========================================================
+  Description: The Early Jemima Experiments: Bare Cylindrical
+               Configurations of Enriched and Natural Uranium
+  Case:        IEU-MET-FAST-001 Case-2
+  ==========================================================
+  -->
+
+  <run_mode>eigenvalue</run_mode>
+  <batches>3000</batches>
+  <inactive>20</inactive>
+  <particles>10000</particles>
+
+  <source>
+    <space>
+      <type>box</type>
+      <parameters>-1 -1 -1 1 1 1</parameters>
+    </space>
+  </source>
+
+</settings>
+

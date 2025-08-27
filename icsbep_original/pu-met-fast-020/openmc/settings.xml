@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+  ==========================================================
+  Description: Sphere of Plutonium Reflected by Depleted
+               Uranium
+  Case:        PU-MET-FAST-020
+  Written By:  Steven Fine
+  Date:        4/5/2012
+  ==========================================================
+  -->
+
+ <eigenvalue>
+   <batches>3000</batches>
+   <inactive>20</inactive>
+   <particles>10000</particles>
+ </eigenvalue>
+
+
+ <source>
+   <space>
+     <type>box</type>
+     <parameters>-1 -1 -1 1 1 1</parameters>
+   </space>
+ </source>
+
+</settings>
+

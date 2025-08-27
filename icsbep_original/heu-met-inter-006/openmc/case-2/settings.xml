@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+  =========================================================
+  Description: ZEUS Criticality Experiments
+  Case:        HEU-MET-INTER-006 Case 2
+  =========================================================
+  -->
+
+  <run_mode>eigenvalue</run_mode>
+  <batches>3000</batches>
+  <inactive>20</inactive>
+  <particles>10000</particles>
+
+  <source>
+    <space>
+      <type>box</type>
+      <parameters>-1. -1. 70.  1. 1. 71.</parameters>
+    </space>
+  </source>
+
+</settings>

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+  ===================================================
+  Description: Duralumin reflected HEU sphere, VNIIEF
+  Case:        HEU-MET-FAST-022 Simplified model
+  ===================================================
+  -->
+
+  <run_mode>eigenvalue</run_mode>
+  <batches>3000</batches>
+  <inactive>20</inactive>
+  <particles>10000</particles>
+
+  <source>
+    <space>
+      <type>box</type>
+      <parameters>-1 -1 -1  1  1  1</parameters>
+    </space>
+  </source>
+
+</settings>

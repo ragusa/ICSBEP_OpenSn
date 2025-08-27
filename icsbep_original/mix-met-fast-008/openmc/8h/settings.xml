@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<settings>
+
+  <!--
+  ==========================================
+  Description: ZEBRA k-infinity experiment
+  Case:        MIX-MET-FAST-008 Case 8H
+  ==========================================
+  -->
+
+  <run_mode>eigenvalue</run_mode>
+  <batches>3000</batches>
+  <inactive>20</inactive>
+  <particles>10000</particles>
+
+  <source>
+    <space>
+      <type>box</type>
+      <parameters>
+        -2.62720 -2.62720 -1.11125
+         2.62720  2.62720  1.11125
+      </parameters>
+    </space>
+  </source>
+
+</settings>
