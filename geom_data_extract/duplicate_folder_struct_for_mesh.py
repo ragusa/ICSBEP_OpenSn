@@ -64,6 +64,7 @@ def create_mesh_tree_from_pickle(
                     rel_path = "/".join(parts[-3:-1])  # "<case>/openmc"
             if not rel_path:
                 continue
+        rel_path = rel_path[:-7]
         rel_path_norm = os.path.normpath(rel_path)
         target_dir = os.path.join(mesh_root, rel_path_norm)
 

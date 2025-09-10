@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 Scan a directory tree for OpenMC geometries that are exclusively spherical.
 
