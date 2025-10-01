@@ -32,13 +32,13 @@ import os
 
 #radii = [0.20, 0.40, 0.60, 0.80, 1.00, 2]  # example with 4 shells
 
-#radlist = sys.argv[1]
-#data_path = sys.argv[2]
-data_path = "/home/rwszolek3/research/ICSBEP_OpenSn/mesh/heu-met-fast-029/"
-#lst = literal_eval(radlist)
-#radii = [float(x) for x in lst] 
-radii = [1.91, 3.15, 4.01, 4.66, 5.35, 6.0, 6.75, 7.55, 8.35, 9.15, 11.0, 12.25]
-uniform_size = 0.08               # global target mesh size
+radlist = sys.argv[1]
+data_path = sys.argv[2]
+#data_path = "/home/rwszolek3/research/ICSBEP_OpenSn/mesh/heu-met-fast-029/"
+lst = literal_eval(radlist)
+radii = [float(x) for x in lst] 
+#radii = [1.91, 3.15, 4.01, 4.66, 5.35, 6.0, 6.75, 7.55, 8.35, 9.15, 11.0, 12.25]
+uniform_size = 0.15        # global target mesh size
 
 model_name   = "n_shells_sphere"  # Gmsh model name
 
@@ -180,11 +180,47 @@ for k in range(1, N + 1):
 
  
 
-# --------------------- Global mesh sizing ------------------------
+# --------------------- Proportional mesh sizing ------------------
+# Scale mesh size with radius: h(r) = (uniform_size / r_min) * r, clamped to [h_min, h_max]
+r_min = radii[0]
+scale = uniform_size / r_min     # ensures h(r_min) = uniform_size
+h_min = 0.5 * uniform_size       # slightly finer allowed near core
+h_max = 8.0 * uniform_size       # coarser allowed outward
 
-gmsh.option.setNumber("Mesh.CharacteristicLengthMin", uniform_size)
+# Define background field using only MathEval + Min/Max (no Constant fields)
+fld = gmsh.model.mesh.field
+# h(r) = scale * sqrt(x^2 + y^2 + z^2)
+fld.add("MathEval", 1)
+fld.setString(1, "F", f"{scale}*sqrt(x*x + y*y + z*z)")
 
-gmsh.option.setNumber("Mesh.CharacteristicLengthMax", uniform_size)
+# Lower bound as constant MathEval: h_min
+fld.add("MathEval", 2)
+fld.setString(2, "F", f"{h_min}")
+
+# max(h(r), h_min)
+fld.add("Max", 3)
+fld.setNumbers(3, "FieldsList", [1, 2])
+
+# Upper bound as constant MathEval: h_max
+fld.add("MathEval", 4)
+fld.setString(4, "F", f"{h_max}")
+
+# min(max(h(r), h_min), h_max)
+fld.add("Min", 5)
+fld.setNumbers(5, "FieldsList", [3, 4])
+
+# Use as background mesh field
+fld.setAsBackgroundMesh(5)
+
+# Make background field authoritative (recommended with background fields)
+gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+
+# (Optional) keep hard clamps consistent with the background field
+gmsh.option.setNumber("Mesh.CharacteristicLengthMin", h_min)
+gmsh.option.setNumber("Mesh.CharacteristicLengthMax", h_max)
+
 
  
 

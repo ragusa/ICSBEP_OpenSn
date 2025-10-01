@@ -7,12 +7,14 @@ from pathlib import Path
 
 def run_worker(radii: str,data_path: str) -> None:
     subprocess.run([sys.executable, "InputVerification.py", radii, data_path], check=True)
+    subprocess.run([sys.executable, "nShell.py", radii, data_path], check=True)
+    
 
 
 # Navigate up one directory
 base_dir = Path(__file__).parent.parent
 # Go into "mesh" folder
-mesh_dir = base_dir / "mesh"
+mesh_dir = base_dir / "spherical_cases"
 filepaths = []
 all_radii = []
 # Iterate through all folders inside "mesh"
@@ -30,8 +32,9 @@ for dirpath, _, filenames in os.walk(mesh_dir):
 # Example: print filepaths and corresponding radii
 
 # #k = 1
-filepaths = filepaths[2:3]
-all_radii = all_radii[2:3]
+
+filepaths = filepaths[16:17]
+all_radii = all_radii[16:17]
 for fp, radii_list in zip(filepaths, all_radii):
     run_worker(str(radii_list),str(fp))
 #     print(k)
