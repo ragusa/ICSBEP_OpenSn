@@ -6,7 +6,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 FAIL_LOG_NAME = "failed_cases.txt"
-DEFAULT_CASE_TIMEOUT_SEC = int(os.getenv("CASE_TIMEOUT_SEC", 3600))  # 1 hr
+DEFAULT_CASE_TIMEOUT_SEC = int(os.getenv("CASE_TIMEOUT_SEC", 3*3600))  # 1 hr
 
 def run_worker(radii_list, radii_file_path, timeout_sec, gmsh_code_dir: Path) -> str:
     """
