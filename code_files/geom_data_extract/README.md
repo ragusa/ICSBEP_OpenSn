@@ -7,13 +7,13 @@ Use the [geometry extraction script](./duplicate_folder_struct_for_mesh.py) to s
 ## How to Run
 
 - Run the script from this folder:
-  python3 duplicate_folder_struct_for_mesh.py
+  python3 [duplicate_folder_struct_for_mesh.py](./duplicate_folder_struct_for_mesh.py)
 
 ## Outputs
 
 - spherical_results.pkl in this folder with scan results.
-- Mirrored mesh tree under MESH_ROOT with normalized case-N folders.
-- radii.txt within a mesh folder in each created case folder with sorted unique radii.
+- Mirrored mesh tree called [spherical_cases](../../spherical_cases/) with case folders.
+- radii.txt within a mesh folder created in each case folder containing sorted sphere radii.
 
 ## Notes
 
