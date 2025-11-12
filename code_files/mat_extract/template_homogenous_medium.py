@@ -92,19 +92,32 @@ def setup_mgxs_tallies(model: openmc.Model, group_edges="XMAS-172", verbose: boo
     return model, mgxs_lib
 
 # ---------- post-processing ----------
-def process_results(sp_file: Path, mgxs_lib: openmc.mgxs.Library,
-                    my_path: Path, h5_filename: str, verbose: bool = False) -> Path:
-    if sp_file is None:
-        raise RuntimeError("No statepoint path returned from model.run().")
-    cell_names = [cell.name for cell in mgxs_lib.domains]
-    if verbose:
-        print("Domains:", cell_names)
+def process_results(sp_file: Path, mgxs_lib: openmc.mgxs.Library, my_path: Path, h5_filename: str):
     with openmc.StatePoint(sp_file) as sp:
         mgxs_lib.load_from_statepoint(sp)
-    mgxs_file = mgxs_lib.create_mg_library(xs_type="macro", xsdata_names=cell_names)
+
+    # Make an XS library (macro) with explicit names
+    xs_names = [dom.name or f"cell_{dom.id}" for dom in mgxs_lib.domains]
+    xs_lib = mgxs_lib.create_mg_library(xs_type="macro", xsdata_names=xs_names)
+
+    # Set common metadata like temperature label expected in files like Oralloy
+    for xs in xs_lib.xsdata.values():
+        xs.temperature = 294.0  # K, matches your tally run temp
+        xs.name = h5_filename   # e.g., material name
+
+        # Ensure included reactions look like Oralloy
+        # These are already populated from mgxs_lib.mgxs_types; confirm presence:
+        assert xs.total is not None
+        assert xs.absorption is not None
+        assert xs.fission is not None or xs.nu_fission is not None
+        assert xs.chi is not None
+        assert xs.scatter_matrix is not None
+        # multiplicity_matrix present if "multiplicity matrix" requested
+
     out = my_path / f"{h5_filename}.h5"
-    mgxs_file.export_to_hdf5(filename=str(out))
+    xs_lib.export_to_hdf5(str(out))
     return out
+
 
 # ---------- source ----------
 def create_source(bbox: openmc.BoundingBox, energy_dist=(0.0e6, 20.0e6)) -> openmc.Source:
