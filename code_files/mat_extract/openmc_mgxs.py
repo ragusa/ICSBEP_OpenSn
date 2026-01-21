@@ -1,25 +1,16 @@
 import os
-import sys
 import openmc
 import openmc.mgxs as mgxs
 
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator
+
+
 # Inputs and global options
 
-# If a path to materials.xml is provided on the command line, use it.
-# Otherwise, default to "materials.xml" in the current working directory.
-if len(sys.argv) > 1:
-    materials_xml_path = sys.argv[1]
-else:
-    materials_xml_path = "materials.xml"
-
-# Resolve to an absolute path and change into the directory containing materials.xml
-materials_xml_path = os.path.abspath(materials_xml_path)
-materials_dir = os.path.dirname(materials_xml_path)
-os.chdir(materials_dir)
-
-# From this point on, use just the filename, and cwd is the materials directory
-MATERIALS_XML = os.path.basename(materials_xml_path)
-
+MATERIALS_XML = "materials.xml"  # original file
 BOX_LENGTH = 10.0  # side length of infinite box [cm]
 
 # Defaults for FISSIONABLE materials (eigenvalue problems)
@@ -35,6 +26,7 @@ N_BATCHES_NONFISS   = 40   # total batches; all are active
 xmas_edges = mgxs.GROUP_STRUCTURES["XMAS-172"]
 groups = mgxs.EnergyGroups(xmas_edges)
 
+
 # Decide if a material is fissionable based on its nuclides
 
 FISSIONABLE_PREFIXES = ("U", "Pu", "Np", "Th", "Am", "Cm", "Cf")
@@ -44,6 +36,90 @@ def material_is_fissionable(mat: openmc.Material) -> bool:
         if name.startswith(FISSIONABLE_PREFIXES):
             return True
     return False
+
+
+# Plotting utilities for MGXS
+
+def plot_total_cross_section(mgxs_filename, material_name=None, save_plot=False):
+    # Plot total and absorption cross sections from an MGXS HDF5 file.
+    with h5py.File(mgxs_filename, "r") as f:
+        # Get group structure (energy boundaries)
+        group_edges = f.attrs["group structure"]
+
+        # Get material name from file if not provided
+        if material_name is None:
+            material_name = list(f.keys())[0]
+
+        # Get temperature group (e.g., '294K')
+        temp_key = list(f[material_name].keys())[0]
+
+        # Extract cross section data
+        xs_total = f[f"{material_name}/{temp_key}/total"][:]
+        xs_absorption = f[f"{material_name}/{temp_key}/absorption"][:]
+
+    # Flip group edges to have highest energies first
+    group_edges = np.flip(group_edges)
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot as histogram-style step plot
+    ax.step(
+        group_edges[:-1],
+        xs_total,
+        where="post",
+        linewidth=2,
+        label="Total",
+        color="blue",
+    )
+    ax.step(
+        group_edges[:-1],
+        xs_absorption,
+        where="post",
+        linewidth=2,
+        label="Absorption",
+        color="red",
+        linestyle="--",
+    )
+
+    # Set log scales for both axes
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+
+    # Labels and formatting
+    ax.set_xlabel("Energy [eV]", fontsize=12)
+    ax.set_ylabel("Cross Section [cm$^{-1}$]", fontsize=12)
+    ax.set_title(f"Cross Sections for {material_name}", fontsize=14)
+    ax.grid(True, which="both", alpha=0.3, linestyle=":")
+    ax.legend(fontsize=10)
+
+    plt.tight_layout()
+
+    # Save if requested
+    if save_plot:
+        plot_filename = mgxs_filename.replace(".h5", "_plot.png")
+        plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
+        print(f"Plot saved to {plot_filename}")
+
+    plt.show()
+
+    return fig, ax
+
+
+def plot_all_materials_in_directory(root_dir="."):
+    # Plot cross sections for all MGXS files found under root_dir.
+    mgxs_files = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if filename.startswith("mgxs_") and filename.endswith(".h5"):
+                mgxs_files.append(os.path.join(dirpath, filename))
+
+    print(f"Found {len(mgxs_files)} MGXS files")
+
+    for mgxs_file in mgxs_files:
+        print(f"\nPlotting {mgxs_file}")
+        plot_total_cross_section(mgxs_file, save_plot=True)
+
 
 # Load materials
 
@@ -61,34 +137,24 @@ for new_id, mat in enumerate(materials, start=1):
             mat.add_nuclide("C13", c13_frac, frac_type)
     # Renumber material ID
     mat.id = new_id
-    # Ensure every material has a non-empty name
-    if not (mat.name and mat.name.strip()):
-        mat.name = f"mat_{mat.id}"
 
 # Overwrite original materials.xml with fixed, renumbered version
 materials.export_to_xml(MATERIALS_XML)
-print("Fixed C0 to C12/C13, renumbered material IDs starting at 1, and ensured non-empty material names in materials.xml")
+print("Fixed C0 to C12/C13 and renumbered material IDs starting at 1 in materials.xml")
 
 all_materials = materials
 
-def get_material_label(mat: openmc.Material) -> str:
-    """
-    Return a safe, non-empty label for this material to use in
-    directory names and XSdata names.
-    """
-    raw = (mat.name or "").strip()
-    if raw:
-        return raw
-    return f"mat_{mat.id}"
 
 # Loop over materials, one separate run per material
 
-root_dir = os.getcwd()  # this is now the materials/ directory for the given benchmark
+root_dir = os.getcwd()
 
 for mat in all_materials:
 
-    label = get_material_label(mat)
-    safe_name = label.replace(" ", "_")
+    # Always ensure a non-empty, filesystem-safe name
+    base_name = mat.name.strip() if (mat.name is not None and mat.name.strip()) else f"mat_{mat.id}"
+    safe_name = base_name.replace(" ", "_")
+
     run_dir = os.path.join(root_dir, f"material_{mat.id}_{safe_name}")
     print(f"Processing material id={mat.id}, name='{mat.name}' in '{run_dir}'")
 
@@ -130,7 +196,8 @@ for mat in all_materials:
         settings.inactive  = 0
         settings.particles = N_PARTICLES_NONFISS
         settings.run_mode  = "fixed source"
-
+        settings.max_particle_events = 200000
+        
     lower_left  = (0.0, 0.0, 0.0)
     upper_right = (L,   L,   L)
     space = openmc.stats.Box(lower_left, upper_right)
@@ -175,7 +242,7 @@ for mat in all_materials:
     mgxs_lib.load_from_statepoint(sp)
 
     # Create and export MGXS HDF5 file for this material
-    xsdata_name = get_material_label(mat)
+    xsdata_name = base_name  # same non-empty base name used above
 
     xsdata = mgxs_lib.get_xsdata(
         domain=mat,
@@ -191,6 +258,12 @@ for mat in all_materials:
     mg_file.export_to_hdf5(mg_filename)
 
     print(f"Wrote MGXS library: {os.path.join(run_dir, mg_filename)}")
+
+    # Plot the freshly written MGXS file for this material
+    try:
+        plot_total_cross_section(mg_filename, material_name=xsdata_name, save_plot=True)
+    except Exception as e:
+        print(f"Warning: plotting failed for {mg_filename}: {e}")
 
     # Return to the original root directory for the next material
     os.chdir(root_dir)

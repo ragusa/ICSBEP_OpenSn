@@ -8,7 +8,7 @@ This folder extracts materials for spherical cases from ICSBEP Criticaly Benchma
 
 From this folder, run:
   - python3 [extract_material.py](./extract_material.py)
-  - python3 [format_material.py](./format_material.py)
+  - python3 [generate_material_mgxs.py](./generate_material_mgxs.py)
 
 ## Inputs
 
@@ -19,7 +19,7 @@ From this folder, run:
 
 - materials/materials.xml created under spherical_cases/{name}/{case-N}/ for each discovered case with a source materials.xml.
 - materials/material_{n}\_{material name}/mgxs\_{material name}.h5 files to be used in OpenSn
-- [failed_material_cases.txt](./failed_material_cases.txt) file within [mat_extract](./) folder consisting of cases that did not complete material extraction.
+- [failed.txt](./failed.txt) file within [mat_extract](./) folder consisting of cases that did not complete material extraction.
 
 ## Rules and Behavior
 
