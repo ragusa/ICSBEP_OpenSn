@@ -123,6 +123,9 @@ def plot_all_materials_in_directory(root_dir="."):
 # Load materials
 
 materials = openmc.Materials.from_xml(MATERIALS_XML)
+your_files = os.getcwd()
+if 'ragusa' in your_files:
+    os.environ['OPENMC_CROSS_SECTIONS'] = '/home/ragusa/xs/endfb-vii.1-hdf5/cross_sections.xml'
 
 # Fix C0 -> C12/C13 and renumber IDs sequentially
 for new_id, mat in enumerate(materials, start=1):
