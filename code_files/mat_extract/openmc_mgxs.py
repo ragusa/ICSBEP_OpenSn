@@ -5,11 +5,10 @@ import openmc.mgxs as mgxs
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import LogLocator
 
 
 # Inputs and global options
-
+SHOW_GRAPH = False
 MATERIALS_XML = "materials.xml"  # original file
 BOX_LENGTH = 10.0  # side length of infinite box [cm]
 
@@ -100,9 +99,9 @@ def plot_total_cross_section(mgxs_filename, material_name=None, save_plot=False)
         plot_filename = mgxs_filename.replace(".h5", "_plot.png")
         plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
         print(f"Plot saved to {plot_filename}")
-
-    plt.show()
-
+    if SHOW_GRAPH:
+        plt.show()
+    
     return fig, ax
 
 
