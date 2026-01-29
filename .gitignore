@@ -208,7 +208,8 @@ __marimo__/
 *.bak
 
 geometry.xml
-materials_*_*/materials.xml
+spherical_cases/*/case-*/materials/material_*/materials.xml
+spherical_cases/*/case-*/materials/material_*/*/materials.xml
 settings.xml
 summary.h5
 statepoint*.h5
