@@ -1,4 +1,5 @@
 import os
+import time
 import openmc
 import openmc.mgxs as mgxs
 
@@ -11,13 +12,12 @@ from pathlib import Path
 
 # ── Inputs and global options ─────────────────────────────────────────────────
 SHOW_GRAPH = False
-MATERIALS_XML = "materials.xml"  # original file
 BOX_LENGTH = 10.0  # side length of infinite box [cm]
 
 # Defaults for FISSIONABLE materials (eigenvalue problems)
-N_PARTICLES_FISS = 300000
-N_BATCHES_FISS = 520
-N_INACTIVE_FISS = 120
+N_PARTICLES_FISS = 200000
+N_BATCHES_FISS = 360
+N_INACTIVE_FISS = 60
 
 # Lighter settings for NON-FISSIONABLE materials (fixed source)
 N_PARTICLES_NONFISS = 5000
@@ -28,15 +28,21 @@ N_INACTIVE_NONFISS = 0
 group_edges = np.loadtxt("../../../../code_files/mat_extract/LANL70g_eV.txt")
 groups = mgxs.EnergyGroups(group_edges)
 
-# Heuristic fissionable detection
-FISSIONABLE_PREFIXES = ("U", "Pu", "Np", "Th", "Am", "Cm", "Cf")
+MATERIALS_XML_IN = "materials.xml"
+MATERIALS_XML_OUT = "materials_fixed.xml"
 
-MATERIALS_XML_IN  = "materials.xml"         # tracked/original
-MATERIALS_XML_OUT = "materials_fixed.xml"   # generated
 
-# ── Helper utilities ──────────────────────────────────────────────────────────
+def _fmt_seconds(seconds: float) -> str:
+    seconds = float(seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60.0
+    if h > 0:
+        return f"{h:d}:{m:02d}:{s:05.2f}"
+    return f"{m:d}:{s:05.2f}"
+
+
 def sanitize_name(name: str, replacement: str = "_") -> str:
-    # Make a string safe for filesystem paths and HDF5 group keys.
     if name is None:
         name = ""
     s = str(name).strip()
@@ -49,17 +55,59 @@ def sanitize_name(name: str, replacement: str = "_") -> str:
 
 
 def material_is_fissionable(mat: openmc.Material) -> bool:
-    for name, _, _ in mat.nuclides:
-        if name.startswith(FISSIONABLE_PREFIXES):
-            return True
-    return False
+    """
+      - Return True for HEU (e.g., U-235 enrichment >> 5%)
+      - Return False for natural/depleted uranium (~0.7% U-235)
+      - Return True for typical Pu-bearing fuels even at modest fractions
+    """
+
+    # Fissile isotopes that strongly indicate eigenvalue-worthy fuel
+    fissile_set = {
+        "U233", "U235",
+        "Pu239", "Pu241",
+        "Am242m"
+    }
+
+    # Actinide element prefixes (used to define "heavy metal" inventory)
+    actinide_prefixes = ("U", "Pu", "Th", "Np", "Am", "Cm", "Cf")
+
+    # Collect atomic amounts
+    ao = {name: amt for (name, amt, _frac_type) in mat.nuclides}
+
+    # Total heavy metal (actinides) present
+    heavy_metal_ao = sum(v for k, v in ao.items() if k.startswith(actinide_prefixes))
+    if heavy_metal_ao <= 0.0:
+        return False
+
+    fissile_ao = sum(ao.get(n, 0.0) for n in fissile_set)
+    if fissile_ao <= 0.0:
+        return False
+
+    # Special case: uranium-only (or uranium-dominated) → use U-235 enrichment threshold
+    u_total = sum(v for k, v in ao.items() if k.startswith("U"))
+    u235 = ao.get("U235", 0.0)
+    u_is_dominant = (u_total / heavy_metal_ao) >= 0.95  # mostly uranium
+
+    if u_is_dominant and u_total > 0.0:
+        enrichment = u235 / u_total  # fraction (not %)
+        # Conservative cutoff: treat <= ~5% as not eigenvalue-worthy in this "bare box" context
+        return enrichment >= 0.05
+
+    # General case (e.g., Pu-bearing, mixed actinides): use fissile fraction among heavy metal
+    fissile_frac = fissile_ao / heavy_metal_ao
+
+    # Pu-bearing fuels can be eigenvalue-worthy at lower fissile fraction than LEU
+    pu_present = any(k.startswith("Pu") for k in ao.keys())
+    if pu_present:
+        return fissile_frac >= 0.01  # 1% fissile among heavy metal
+
+    # Otherwise, require a modest fissile share
+    return fissile_frac >= 0.02  # 2% fissile among heavy metal
 
 
-def export_results_to_csv(xs, group_edges, file_path, verbose=False):
-    # Export cross-section data to CSV files.
+
+def export_results_to_csv(xs, group_edges, file_path):
     for xs_type, data in xs.items():
-        if verbose:
-            print(xs_type)
         filename = file_path + f"xs_{xs_type.replace(' ', '_')}.csv"
         if data.ndim == 3:
             pn = data.shape[-1]
@@ -71,17 +119,13 @@ def export_results_to_csv(xs, group_edges, file_path, verbose=False):
             np.savetxt(filename, data, delimiter=",")
     ng = len(group_edges) - 1
     np.savetxt(file_path + f"energy_edges_{ng}g.csv", group_edges, delimiter=",")
-    print("Cross-section data saved to CSV files.")
 
 
-def process_results(sp_filename, mgxs_lib, my_path, h5_filename, verbose=False):
-    # Process OpenMC statepoint results and export MGXS HDF5 + CSV data.
+def process_results(sp_filename, mgxs_lib, my_path, h5_filename):
     if sp_filename is None:
         raise RuntimeError("sp_filename is None")
 
     cell_names = [cell.name for cell in mgxs_lib.domains]
-    if verbose:
-        print("all cell_names in order:\n\t", cell_names)
 
     sp = openmc.StatePoint(sp_filename)
     summary = openmc.Summary(os.path.join(os.path.dirname(sp_filename), "summary.h5"))
@@ -89,10 +133,7 @@ def process_results(sp_filename, mgxs_lib, my_path, h5_filename, verbose=False):
     mgxs_lib.load_from_statepoint(sp)
 
     mgxs_file = mgxs_lib.create_mg_library(xs_type="macro", xsdata_names=cell_names)
-
-    h5_file_path = str(my_path / f"{h5_filename}.h5")
-    print(h5_file_path)
-    mgxs_file.export_to_hdf5(filename=h5_file_path)
+    mgxs_file.export_to_hdf5(filename=str(my_path / f"{h5_filename}.h5"))
 
     for cell in mgxs_lib.domains:
         cell_id = cell.id
@@ -101,43 +142,21 @@ def process_results(sp_filename, mgxs_lib, my_path, h5_filename, verbose=False):
             xs_type: mgxs_lib.get_mgxs(cell_id, xs_type).get_xs()
             for xs_type in mgxs_lib.mgxs_types
         }
-        file_path_csv = str(my_path / f"{cell_name}_")
-        group_edges_arr = mgxs_lib.energy_groups.group_edges
-        export_results_to_csv(xs, group_edges_arr, file_path_csv)
+        export_results_to_csv(xs, mgxs_lib.energy_groups.group_edges, str(my_path / f"{cell_name}_"))
 
     sp.close()
 
 
-# ── Plotting utilities ────────────────────────────────────────────────────────
-def plot_total_cross_section(
-    mgxs_filename,
-    material_name=None,
-    material_key=None,
-    display_name=None,
-    save_plot=False,
-):
-    # Plot total and absorption cross sections from an MGXS HDF5 file.
+def plot_total_cross_section(mgxs_filename, material_key, display_name, save_plot=True):
     with h5py.File(mgxs_filename, "r") as f:
-        group_edges_local = f.attrs["group structure"]
-
-        if material_key is None:
-            material_key = material_name
-        if material_key is None:
-            material_key = list(f.keys())[0]
-        if display_name is None:
-            display_name = material_key
-
+        group_edges_local = np.flip(f.attrs["group structure"])
         temp_key = list(f[material_key].keys())[0]
         xs_total = f[f"{material_key}/{temp_key}/total"][:]
         xs_absorption = f[f"{material_key}/{temp_key}/absorption"][:]
 
-    group_edges_local = np.flip(group_edges_local)
-
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.step(group_edges_local[:-1], xs_total, where="post", linewidth=2,
-            label="Total", color="blue")
-    ax.step(group_edges_local[:-1], xs_absorption, where="post", linewidth=2,
-            label="Absorption", color="red", linestyle="--")
+    ax.step(group_edges_local[:-1], xs_total, where="post", linewidth=2, label="Total", color="blue")
+    ax.step(group_edges_local[:-1], xs_absorption, where="post", linewidth=2, label="Absorption", color="red", linestyle="--")
     ax.set_xscale("log")
     ax.set_yscale("linear")
     ax.set_xlabel("Energy [eV]", fontsize=12)
@@ -150,29 +169,14 @@ def plot_total_cross_section(
     if save_plot:
         plot_filename = mgxs_filename.replace(".h5", "_plot.png")
         plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
-        print(f"Plot saved to {plot_filename}")
     if SHOW_GRAPH:
         plt.show()
     plt.close(fig)
 
-    return fig, ax
-
-
-def plot_all_materials_in_directory(root_dir="."):
-    # Plot cross sections for all MGXS files found under root_dir.
-    mgxs_files = []
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        for filename in filenames:
-            if filename.startswith("mgxs_") and filename.endswith(".h5"):
-                mgxs_files.append(os.path.join(dirpath, filename))
-
-    print(f"Found {len(mgxs_files)} MGXS files")
-    for mgxs_file in mgxs_files:
-        print(f"\nPlotting {mgxs_file}")
-        plot_total_cross_section(mgxs_file, save_plot=True)
-
 
 # ── Load and fix materials ────────────────────────────────────────────────────
+script_t0 = time.perf_counter()
+
 materials = openmc.Materials.from_xml(MATERIALS_XML_IN)
 
 your_files = os.getcwd()
@@ -181,7 +185,6 @@ if "ragusa" in your_files:
         "/home/ragusa/xs/endfb-viii.0-hdf5/cross_sections.xml"
     )
 
-# Fix C0 -> C12/C13 and renumber IDs sequentially
 for new_id, mat in enumerate(materials, start=1):
     for name, frac, frac_type in list(mat.nuclides):
         if name == "C0":
@@ -191,39 +194,36 @@ for new_id, mat in enumerate(materials, start=1):
             mat.add_nuclide("C12", c12_frac, frac_type)
             mat.add_nuclide("C13", c13_frac, frac_type)
     mat.id = new_id
-    
+
 materials.export_to_xml(MATERIALS_XML_OUT)
 all_materials = openmc.Materials.from_xml(MATERIALS_XML_OUT)
-print("Fixed C0 to C12/C13 and renumbered material IDs starting at 1.")
 
+# Keep your original behavior (you overwrite with in-memory materials)
 all_materials = materials
+
 
 # ── Main loop: one separate run per material ──────────────────────────────────
 root_dir = os.getcwd()
+all_materials_list = list(all_materials)
+n_total = len(all_materials_list)
 
-for mat in all_materials:
-    # ── Name handling ─────────────────────────────────────────────────────
-    base_name = (
-        mat.name.strip()
-        if (mat.name is not None and mat.name.strip())
-        else f"mat_{mat.id}"
-    )
+print(f"TIMING: case_start materials={n_total}", flush=True)
+
+for i_mat, mat in enumerate(all_materials_list, start=1):
+    mat_t0 = time.perf_counter()
+
+    base_name = mat.name.strip() if (mat.name is not None and mat.name.strip()) else f"mat_{mat.id}"
     safe_name = sanitize_name(base_name)
-
     run_dir = os.path.join(root_dir, f"material_{mat.id}_{safe_name}")
-    print(f"\nProcessing material id={mat.id}, name='{mat.name}' in '{run_dir}'")
 
     os.makedirs(run_dir, exist_ok=True)
     os.chdir(run_dir)
 
-    # Ensure IDs start fresh for each material
     openmc.reset_auto_ids()
 
-    # ── Materials: write then reload fresh to avoid registry collisions ───
     openmc.Materials([mat]).export_to_xml("materials.xml")
     one_mat = openmc.Materials.from_xml("materials.xml")[0]
 
-    # ── Geometry (reflective box → infinite homogeneous medium) ───────────
     L = BOX_LENGTH
     x0 = openmc.XPlane(x0=0.0, boundary_type="reflective")
     x1 = openmc.XPlane(x0=L, boundary_type="reflective")
@@ -238,48 +238,38 @@ for mat in all_materials:
     geometry.export_to_xml()
 
     bbox = geometry.bounding_box
-
-    # ── Source: only apply fissionable constraint when it makes sense ─────
     uniform_dist = openmc.stats.Box(bbox.lower_left, bbox.upper_right)
 
     if material_is_fissionable(one_mat):
-        source = openmc.IndependentSource(
-            space=uniform_dist,
-            constraints={"fissionable": True},
-        )
-        print("  Using source constraint: fissionable=True")
+        source = openmc.IndependentSource(space=uniform_dist, constraints={"fissionable": True})
+        fiss_flag = 1
     else:
         source = openmc.IndependentSource(space=uniform_dist)
-        print("  Using unconstrained uniform box source (nonfissionable material)")
+        fiss_flag = 0
 
-    # ── Settings ──────────────────────────────────────────────────────────
     settings = openmc.Settings()
-    settings.source = source    
+    settings.source = source
 
     if material_is_fissionable(mat):
-        settings.batches   = N_BATCHES_FISS
-        settings.inactive  = N_INACTIVE_FISS
+        settings.batches = N_BATCHES_FISS
+        settings.inactive = N_INACTIVE_FISS
         settings.particles = N_PARTICLES_FISS
-        settings.run_mode  = "eigenvalue"
+        settings.run_mode = "eigenvalue"
     else:
-        settings.batches   = N_BATCHES_NONFISS
-        settings.inactive  = N_INACTIVE_NONFISS
+        settings.batches = N_BATCHES_NONFISS
+        settings.inactive = N_INACTIVE_NONFISS
         settings.particles = N_PARTICLES_NONFISS
-        settings.run_mode  = "fixed source"
+        settings.run_mode = "fixed source"
         settings.max_particle_events = 200000
-    
+
     settings.temperature["method"] = "interpolation"
     settings.export_to_xml()
     expected_sp = f"statepoint.{settings.batches}.h5"
 
-
-    # ── MGXS library ─────────────────────────────────────────────────────
     mgxs_lib = mgxs.Library(geometry)
     mgxs_lib.energy_groups = groups
-
     mgxs_lib.scatter_format = "legendre"
     mgxs_lib.legendre_order = 7
-
     mgxs_lib.mgxs_types = [
         "total",
         "absorption",
@@ -292,9 +282,7 @@ for mat in all_materials:
         "consistent nu-scatter matrix",
         "multiplicity matrix",
     ]
-
     mgxs_lib.by_nuclide = False
-
     mgxs_lib.domain_type = "cell"
     mgxs_lib.domains = list(geometry.get_all_material_cells().values())
 
@@ -303,33 +291,39 @@ for mat in all_materials:
     mgxs_lib.add_to_tallies_file(tallies, merge=True)
     tallies.export_to_xml()
 
-    # ── Run OpenMC ───────────────────────────────────────────────────────
-    openmc.run(cwd=".")
+    run_t0 = time.perf_counter()
+    openmc.run(cwd=".", output=False)  # suppress OpenMC console output
+    run_dt = time.perf_counter() - run_t0
 
     if not os.path.exists(expected_sp):
         raise RuntimeError(f"Expected statepoint '{expected_sp}' not found.")
 
-    # ── Process results & export MGXS HDF5 + CSV ─────────────────────────
+    post_t0 = time.perf_counter()
     my_path = Path(".")
     ng = len(groups.group_edges) - 1
-    gr_name = f"_LANL{ng}g"
-    h5_filename = f"{safe_name}{gr_name}"
+    h5_filename = f"{safe_name}_LANL{ng}g"
 
     process_results(expected_sp, mgxs_lib, my_path, h5_filename=h5_filename)
 
-    # ── Plot the freshly written MGXS file ───────────────────────────────
     mgxs_h5_path = str(my_path / f"{h5_filename}.h5")
     try:
-        plot_total_cross_section(
-            mgxs_h5_path,
-            material_key=safe_name,
-            display_name=base_name,
-            save_plot=True,
-        )
-    except Exception as e:
-        print(f"Warning: plotting failed for {mgxs_h5_path}: {e}")
+        plot_total_cross_section(mgxs_h5_path, material_key=safe_name, display_name=base_name, save_plot=True)
+    except Exception:
+        # Keep quiet by default; helper will still see timing.
+        pass
 
-    # Return to the original root directory for the next material
+    post_dt = time.perf_counter() - post_t0
+
     os.chdir(root_dir)
 
-print("\n=== All materials processed. ===")
+    mat_dt = time.perf_counter() - mat_t0
+    print(
+        "TIMING: material_done "
+        f"{i_mat}/{n_total} id={mat.id} fiss={fiss_flag} "
+        f"total={_fmt_seconds(mat_dt)} openmc={_fmt_seconds(run_dt)} post={_fmt_seconds(post_dt)} "
+        f"name={safe_name}",
+        flush=True,
+    )
+
+script_dt = time.perf_counter() - script_t0
+print(f"TIMING: case_total total={_fmt_seconds(script_dt)}", flush=True)
