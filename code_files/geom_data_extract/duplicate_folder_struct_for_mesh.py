@@ -1,311 +1,191 @@
-#!/usr/bin/env python3
-"""
-Scan a directory tree for OpenMC geometries that are exclusively spherical,
-then create a mirrored mesh tree with normalized case folders.
-
-What it does
-------------
-- Walks the filesystem starting at ROOT.
-- Processes any directory at or below an 'openmc' segment (case-insensitive).
-- In each such directory, looks for 'geometry.xml', parses <surface> elements,
-  and confirms every surface is type="sphere".
-- If exclusively spherical, records radii and writes them into a mirrored tree
-  under MESH_ROOT at: <prefix-before-openmc>/case-<n>,
-  where <n> is taken from the first case-like segment after 'openmc' (case-2, c2 → case-2),
-  or defaults to case-1 if missing/non-standard.
-
-No third-party deps.
-"""
-
 import os
-import sys
-import math
-import pickle
 import re
+import math
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple, Optional
+
+# ---- Filepaths ----
+ROOT = r"../../icsbep_original"
+OUT  = r"../../spherical_cases"
+# -------------------
 
 
-# ----------------- XML helpers -----------------
-
-def _is_surface_tag(elem: ET.Element) -> bool:
-    return elem.tag.split("}")[-1] == "surface"
-
-
-def _to_float_or_none(x: Optional[str]) -> Optional[float]:
-    if x is None:
-        return None
-    try:
-        return float(x)
-    except Exception:
-        return None
+# Return a sorted list of floats with near-duplicates removed within a tolerance.
+def unique_sorted(vals, tol=1e-9):
+    vals = sorted(float(v) for v in vals)
+    out = []
+    for v in vals:
+        if not out or abs(v - out[-1]) > tol:
+            out.append(v)
+    return out
 
 
-def _parse_coeffs(coeffs: str) -> Optional[Tuple[float, float, float, float]]:
-    """
-    Parse coeffs="x0 y0 z0 r" into floats.
-    Returns (x0, y0, z0, r) or None if invalid.
-    """
-    try:
-        parts = coeffs.replace(",", " ").split()
-        if len(parts) < 4:
-            return None
-        x0, y0, z0, r = map(float, parts[:4])
-        return (x0, y0, z0, r)
-    except Exception:
-        return None
+# Convert an openmc-relative directory path into "<prefix-before-openmc>/case-<n>".
+def derive_dest_relpath(openmc_dir_rel):
+    parts = [p for p in os.path.normpath(openmc_dir_rel).split(os.sep) if p and p != "."]
 
-
-def _sphere_from_surface_elem(s: ET.Element) -> Optional[Dict[str, float]]:
-    """
-    Build a sphere dict from a <surface type='sphere'> element.
-    Prefer 'coeffs'. Fallback to attributes r/radius and x0,y0,z0.
-    Returns {'r','x0','y0','z0'} or None if invalid/missing data.
-    """
-    coeffs = s.attrib.get("coeffs")
-    if coeffs is not None:
-        parsed = _parse_coeffs(coeffs)
-        if parsed is None:
-            return None
-        x0, y0, z0, r = parsed
-        if not (math.isfinite(r) and r > 0.0):
-            return None
-        return {"r": r, "x0": x0, "y0": y0, "z0": z0}
-
-    r = _to_float_or_none(s.attrib.get("r"))
-    if r is None:
-        r = _to_float_or_none(s.attrib.get("radius"))
-    if r is None or not (math.isfinite(r) and r > 0.0):
-        return None
-    x0 = _to_float_or_none(s.attrib.get("x0"))
-    y0 = _to_float_or_none(s.attrib.get("y0"))
-    z0 = _to_float_or_none(s.attrib.get("z0"))
-    x0 = 0.0 if x0 is None else x0
-    y0 = 0.0 if y0 is None else y0
-    z0 = 0.0 if z0 is None else z0
-
-    return {"r": float(r), "x0": float(x0), "y0": float(y0), "z0": float(z0)}
-
-
-def analyze_geometry_xml(path: str) -> Tuple[bool, List[Dict[str, float]]]:
-    """
-    Analyze geometry.xml at `path`.
-    Returns (is_exclusively_spherical, spheres).
-    """
-    try:
-        tree = ET.parse(path)
-        root = tree.getroot()
-    except Exception:
-        return (False, [])
-    surfaces = [e for e in root.iter() if _is_surface_tag(e)]
-    if not surfaces:
-        return (False, [])
-    spheres: List[Dict[str, float]] = []
-    for s in surfaces:
-        stype = (s.attrib.get("type") or "").strip().lower()
-        if stype != "sphere":
-            return (False, [])
-        sp = _sphere_from_surface_elem(s)
-        if sp is None:
-            return (False, [])
-        spheres.append(sp)
-    return (True, spheres)
-
-
-# ----------------- Geometry summarizers -----------------
-
-def unique_sorted_radii(
-    spheres: List[Dict[str, float]], tol: float = 1e-9
-) -> List[float]:
-    """Return unique radii sorted ascending, deduplicated within tolerance."""
-    vals = sorted(s["r"] for s in spheres)
-    uniq: List[float] = []
-    for r in vals:
-        if not uniq or abs(r - uniq[-1]) > tol:
-            uniq.append(r)
-    return uniq
-
-
-# ----------------- Scanner -----------------
-
-def scan_for_openmc_spheres(root_dir: str) -> List[dict]:
-    """
-    Walk `root_dir`, find any directories that are at or below an 'openmc' segment,
-    parse geometry.xml there, and collect spherical-only results.
-    """
-    results: List[dict] = []
-    root_dir = os.path.abspath(root_dir)
-
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        parts = os.path.normpath(dirpath).split(os.sep)
-        if not any(seg.lower() == "openmc" for seg in parts):
-            continue
-
-        geom_path = os.path.join(dirpath, "geometry.xml")
-        if not os.path.isfile(geom_path):
-            continue
-
-        is_spherical, spheres = analyze_geometry_xml(geom_path)
-        rec = {
-            "openmc_dir": os.path.relpath(dirpath, root_dir),  # may be .../openmc or .../openmc/case-*
-            "geometry_xml": geom_path,                         # absolute path
-            "exclusively_spherical": bool(is_spherical),
-        }
-        if is_spherical:
-            rec["radii"] = unique_sorted_radii(spheres)
-        results.append(rec)
-
-    return results
-
-
-def print_report(results: List[dict]) -> None:
-    """Print only the folders whose geometry is exclusively spherical, with radii."""
-    print("\nFolders with exclusively spherical geometries:\n" + "-" * 60)
-    any_printed = False
-    for rec in results:
-        if not rec["exclusively_spherical"]:
-            continue
-        any_printed = True
-        print(rec["openmc_dir"])
-        rads = rec.get("radii", [])
-        print(
-            "  Shell radii (sorted): "
-            + (", ".join(f"{r:g}" for r in rads) if rads else "(none)")
-        )
-        print()
-    if not any_printed:
-        print("(none)\n")
-
-
-# ----------------- Mesh tree builder (normalized case-#) -----------------
-
-# case-like leader and digits
-CASE_LEAD_RE = re.compile(r'^(case|c)[-_]?\d+', re.IGNORECASE)
-DIGITS_RE = re.compile(r'(\d+)')
-
-
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-
-def write_radii_file(path: str, radii, fname: str = "radii.txt") -> None:
-    # ensure the "mesh" subfolder exists and write radii.txt inside it
-    target_dir = os.path.join(path, "mesh")
-    ensure_dir(target_dir)
-    vals = sorted(set(float(r) for r in radii))
-    out_path = os.path.join(target_dir, fname)
-    with open(out_path, "w", encoding="utf-8") as f:
-        for r in vals:
-            f.write(f"{r:.17g}\n")
-
-
-
-def _split_any(path: str) -> List[str]:
-    # Platform-agnostic splitter: normalize slashes to '/'
-    path = (path or "").replace("\\", "/")
-    return [p for p in path.split("/") if p and p != "."]
-
-
-def _strip_filename(parts: List[str]) -> List[str]:
-    # Drop trailing filename (e.g., geometry.xml) if present
-    return parts[:-1] if parts and "." in parts[-1] else parts
-
-
-def _find_openmc_index(parts: List[str]) -> int:
+    # Find the last "openmc" segment so we handle nested paths safely.
+    j = -1
     for i in range(len(parts) - 1, -1, -1):
         if parts[i].lower() == "openmc":
-            return i
-    return -1
-
-
-def _extract_case_number(seg: str) -> Optional[int]:
-    if not CASE_LEAD_RE.match(seg or ""):
-        return None
-    m = DIGITS_RE.search(seg)
-    if not m:
-        return None
-    try:
-        return int(m.group(1))
-    except Exception:
-        return None
-
-
-def _derive_target_rel_from_record(rec: dict) -> Optional[str]:
-    """
-    Build target relative path under mesh_root as:
-        <prefix-before-openmc> / case-<n>
-    where <n> is extracted from the first case-like segment immediately after 'openmc',
-    or defaults to 1 if no case segment exists or is non-standard.
-    """
-    path_hint = (
-        rec.get("openmc_dir")
-        or rec.get("openmc_dir_rel")
-        or rec.get("geometry_xml")
-        or rec.get("geometry_xml_rel")
-        or ""
-    )
-    parts = _strip_filename(_split_any(path_hint))
-    j = _find_openmc_index(parts)
-    if j == -1:
+            j = i
+            break
+    if j < 0:
         return None
 
     prefix = parts[:j]
-    after = parts[j + 1 :]
+    after = parts[j + 1:]
 
+    # Pull the first digits out of a "case-like" segment (case-2, c2, case_2, etc.).
     case_num = None
     if after:
-        case_num = _extract_case_number(after[0])
+        seg = after[0]
+        if re.match(r"^(case|c)[-_]?\d+", seg, flags=re.IGNORECASE):
+            m = re.search(r"(\d+)", seg)
+            if m:
+                try:
+                    case_num = int(m.group(1))
+                except Exception:
+                    case_num = None
     if case_num is None:
         case_num = 1
 
-    case_dir = f"case-{case_num}"
-    rel = os.path.join(*prefix, case_dir) if prefix else case_dir
-    return os.path.normpath(rel)
+    if prefix:
+        return os.path.join(*prefix, f"case-{case_num}")
+    return f"case-{case_num}"
 
 
-def create_mesh_tree_from_records(
-    records: List[dict], mesh_root: str, radii_filename: str = "radii.txt"
-) -> None:
-    mesh_root = os.path.abspath(mesh_root)
-    ensure_dir(mesh_root)
-    created = 0
-    for rec in records:
-        if not isinstance(rec, dict):
+# Parse a geometry.xml and return (True, radii) only if every surface is a sphere with a valid radius.
+def analyze_geometry_xml(geom_path):
+    try:
+        root = ET.parse(geom_path).getroot()
+    except Exception:
+        return (False, [])
+
+    radii = []
+    any_surface = False
+
+    for elem in root.iter():
+        # Only look at <surface> tags (including namespaced ones).
+        if elem.tag.split("}")[-1] != "surface":
             continue
-        if not rec.get("exclusively_spherical", False):
+
+        any_surface = True
+        stype = (elem.attrib.get("type") or "").strip().lower()
+        if stype != "sphere":
+            return (False, [])
+
+        # Prefer coeffs="x0 y0 z0 r" if present; otherwise use r= or radius=.
+        r = None
+        coeffs = elem.attrib.get("coeffs")
+        if coeffs:
+            parts = coeffs.replace(",", " ").split()
+            if len(parts) >= 4:
+                try:
+                    r = float(parts[3])
+                except Exception:
+                    r = None
+        else:
+            for key in ("r", "radius"):
+                if key in elem.attrib:
+                    try:
+                        r = float(elem.attrib[key])
+                        break
+                    except Exception:
+                        r = None
+
+        if r is None or (not math.isfinite(r)) or r <= 0.0:
+            return (False, [])
+
+        radii.append(r)
+
+    if not any_surface:
+        return (False, [])
+
+    return (True, radii)
+
+
+def main():
+    if not os.path.isdir(ROOT):
+        raise FileNotFoundError(f"ROOT not found: {ROOT}")
+    os.makedirs(OUT, exist_ok=True)
+
+    seen_geom = 0
+    spherical = 0
+    copied_geom = 0
+    wrote_radii = 0
+    copied_mat = 0
+    missing_mat = 0
+
+    root_abs = os.path.abspath(ROOT)
+
+    for dirpath, _, filenames in os.walk(root_abs):
+        # Only consider folders at/below an "openmc" segment.
+        dir_parts = [p for p in os.path.normpath(dirpath).split(os.sep) if p]
+        if not any(p.lower() == "openmc" for p in dir_parts):
             continue
-        target_rel = _derive_target_rel_from_record(rec)
-        if not target_rel:
+
+        if "geometry.xml" not in filenames:
             continue
-        target_dir = os.path.join(mesh_root, target_rel)
-        radii = rec.get("radii") or []
+
+        seen_geom += 1
+        geom_path = os.path.join(dirpath, "geometry.xml")
+
+        ok, radii = analyze_geometry_xml(geom_path)
+        if not ok:
+            continue
+
+        radii = unique_sorted(radii)
         if not radii:
             continue
-        write_radii_file(target_dir, radii, fname=radii_filename)
-        created += 1
-    print(f"Created {created} folder(s) with {radii_filename} under: {mesh_root}")
 
+        openmc_dir_rel = os.path.relpath(dirpath, root_abs)
+        dest_rel = derive_dest_relpath(openmc_dir_rel)
+        if not dest_rel:
+            continue
 
-# ----------------- Main -----------------
+        dest_case_dir = os.path.join(OUT, dest_rel)
+
+        # ---- mesh outputs ----
+        mesh_dir = os.path.join(dest_case_dir, "mesh")
+        os.makedirs(mesh_dir, exist_ok=True)
+
+        # Copy geometry.xml -> mesh/geometry.xml (simple byte copy).
+        dest_geom = os.path.join(mesh_dir, "geometry.xml")
+        with open(geom_path, "rb") as fsrc, open(dest_geom, "wb") as fdst:
+            fdst.write(fsrc.read())
+        copied_geom += 1
+
+        # Write mesh/radii.txt
+        radii_path = os.path.join(mesh_dir, "radii.txt")
+        with open(radii_path, "w", encoding="utf-8") as f:
+            for r in radii:
+                f.write(f"{r:.17g}\n")
+        wrote_radii += 1
+
+        # ---- materials copy (if present next to geometry.xml) ----
+        src_mat = os.path.join(dirpath, "materials.xml")
+        if os.path.isfile(src_mat):
+            mat_dir = os.path.join(dest_case_dir, "materials")
+            os.makedirs(mat_dir, exist_ok=True)
+
+            dest_mat = os.path.join(mat_dir, "materials.xml")
+            with open(src_mat, "rb") as fsrc, open(dest_mat, "wb") as fdst:
+                fdst.write(fsrc.read())
+            copied_mat += 1
+        else:
+            missing_mat += 1
+
+        spherical += 1
+
+    print("ROOT:", os.path.abspath(ROOT))
+    print("OUT :", os.path.abspath(OUT))
+    print("geometry.xml found under openmc:", seen_geom)
+    print("spherical cases copied        :", spherical)
+    print("geometry.xml copied to mesh/  :", copied_geom)
+    print("radii.txt written             :", wrote_radii)
+    print("materials.xml copied          :", copied_mat)
+    print("spherical cases missing materials.xml:", missing_mat)
+
 
 if __name__ == "__main__":
-    # Set paths here
-    ROOT = r"../../icsbep_original/"   # starting folder to scan
-    MESH_ROOT = r"../../spherical_cases"          # output mirrored root
-
-    if not os.path.isdir(ROOT):
-        print(f"Error: '{ROOT}' is not a directory.", file=sys.stderr)
-        sys.exit(2)
-
-    # 1) Scan and report
-    results = scan_for_openmc_spheres(ROOT)
-    print_report(results)
-
-    # 2) Save pickle for archival/debug
-    out_pkl = "spherical_results.pkl"
-    with open(out_pkl, "wb") as f:
-        pickle.dump(results, f)
-    print(f"Saved pickle results to {out_pkl}")
-
-    # 3) Create mesh tree with normalized case folders
-    create_mesh_tree_from_records(results, MESH_ROOT, radii_filename="radii.txt")
+    main()
