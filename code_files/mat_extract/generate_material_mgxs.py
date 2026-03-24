@@ -1,25 +1,31 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 
 
 # -------------------- User-editable range (1-based, inclusive) --------------------
-START_CASE_NUM = 1
-END_CASE_NUM = None  # None means "last found"
+START_CASE_NUM = 6
+END_CASE_NUM = 7  # None means "last found"
+
+# Only forward these child lines to the console (everything else is hidden)
+FORWARD_PREFIXES = ("TIMING:", "ERROR:", "WARN:")
 
 
 # -------------------- Data model --------------------
 @dataclass(frozen=True)
 class MatCase:
-    num: int                 # 1-based index in discovery list
-    case_name: str           # e.g., "heu-met-fast-002"
-    case_id: str             # e.g., "case-1"
-    materials_dir: Path      # folder that contains materials.xml
-    xml_path: Path           # full path to materials.xml
+    num: int
+    case_name: str
+    case_id: str
+    materials_dir: Path
+    xml_path: Path
 
 
 # -------------------- Helpers --------------------
@@ -65,18 +71,62 @@ def clamp_range(start_1based: int, end_1based: Optional[int], total: int) -> Tup
     return start, end
 
 
-def run_code_in_dir(code_path: Path, workdir: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(code_path)],
+def format_seconds(seconds: float) -> str:
+    seconds = float(seconds)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60.0
+    if h > 0:
+        return f"{h:d}:{m:02d}:{s:05.2f}"
+    return f"{m:d}:{s:05.2f}"
+
+
+def run_code_in_dir_filtered(
+    code_path: Path,
+    workdir: Path,
+    *,
+    forward_prefixes: Tuple[str, ...] = FORWARD_PREFIXES,
+    tail_lines: int = 200,
+) -> Tuple[int, str]:
+    """
+    Run the child script in workdir.
+
+    - Does NOT show OpenMC (or other) output.
+    - Only forwards child lines that start with forward_prefixes.
+    - Returns (returncode, combined_output_tail) for failure logging.
+    """
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    cmd = [sys.executable, "-u", str(code_path)]
+    proc = subprocess.Popen(
+        cmd,
         cwd=str(workdir),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        check=False,
+        bufsize=1,
+        env=env,
     )
+
+    assert proc.stdout is not None
+    tail: Deque[str] = deque(maxlen=tail_lines)
+
+    for line in proc.stdout:
+        tail.append(line.rstrip("\n"))
+        s = line.lstrip()
+        if s.startswith(forward_prefixes):
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+    proc.wait()
+    return proc.returncode, "\n".join(tail)
 
 
 # -------------------- Main --------------------
 def main() -> int:
+    overall_t0 = time.perf_counter()
+
     script_dir = Path(__file__).resolve().parent
     code_path = script_dir / "openmc_mgxs.py"
     if not code_path.is_file():
@@ -87,54 +137,57 @@ def main() -> int:
     total = len(cases)
     start, end = clamp_range(START_CASE_NUM, END_CASE_NUM, total)
 
-    print(f"Found {total} materials.xml files under: {spherical_root}")
+    print(f"Found {total} materials.xml files under: {spherical_root}", flush=True)
     if total == 0:
         return 0
 
-    print(f"Running cases in range: {start} through {end}")
+    print(f"Running cases in range: {start} through {end}", flush=True)
 
     failed_path = script_dir / "failed.txt"
-    # Overwrite each run so it reflects the latest attempt
     failed_path.write_text("", encoding="utf-8")
 
     failures = 0
+    ran = 0
+
     for c in cases:
         if not (start <= c.num <= end):
             continue
 
+        ran += 1
         display_name = f"{c.case_name}/{c.case_id}"
-        print(f"[{c.num}/{total}] Running {display_name} in {c.materials_dir}")
+        print("\n" + "=" * 88, flush=True)
+        print(f"[{c.num}/{total}] Running {display_name} in {c.materials_dir}", flush=True)
 
+        case_t0 = time.perf_counter()
         try:
-            proc = run_code_in_dir(code_path, c.materials_dir)
-            if proc.returncode != 0:
-                failures += 1
-                with failed_path.open("a", encoding="utf-8") as ff:
-                    ff.write(f"CASE #{c.num}: {display_name}\n")
-                    ff.write(f"  xml_path: {c.xml_path}\n")
-                    ff.write(f"  workdir:  {c.materials_dir}\n")
-                    ff.write(f"  returncode: {proc.returncode}\n")
-                    # Keep stderr; include a little stdout if helpful
-                    if proc.stderr:
-                        ff.write("  stderr:\n")
-                        ff.write(proc.stderr.strip() + "\n")
-                    if proc.stdout:
-                        ff.write("  stdout (tail):\n")
-                        ff.write("\n".join(proc.stdout.splitlines()[-40:]) + "\n")
-                    ff.write("\n")
+            returncode, tail = run_code_in_dir_filtered(code_path, c.materials_dir)
         except Exception as e:
+            returncode = 999
+            tail = f"Helper exception while launching child:\n{type(e).__name__}: {e}"
+        case_dt = time.perf_counter() - case_t0
+
+        print(f"[{c.num}/{total}] Case time: {format_seconds(case_dt)} (rc={returncode})", flush=True)
+
+        if returncode != 0:
             failures += 1
             with failed_path.open("a", encoding="utf-8") as ff:
                 ff.write(f"CASE #{c.num}: {display_name}\n")
                 ff.write(f"  xml_path: {c.xml_path}\n")
                 ff.write(f"  workdir:  {c.materials_dir}\n")
-                ff.write(f"  exception: {type(e).__name__}: {e}\n\n")
+                ff.write(f"  returncode: {returncode}\n")
+                ff.write(f"  case_time_seconds: {case_dt:.6f}\n")
+                ff.write("  combined_output_tail:\n")
+                ff.write(tail.strip() + "\n\n")
+
+    overall_dt = time.perf_counter() - overall_t0
+    print("\n" + "=" * 88, flush=True)
+    print(f"Helper finished. Ran {ran} case(s) in {format_seconds(overall_dt)} total.", flush=True)
 
     if failures:
-        print(f"Done with {failures} failures. See: {failed_path}")
+        print(f"Done with {failures} failures. See: {failed_path}", flush=True)
         return 2
 
-    print("Done with no failures.")
+    print("Done with no failures.", flush=True)
     return 0
 
 
