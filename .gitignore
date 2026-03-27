@@ -215,3 +215,5 @@ summary.h5
 statepoint*.h5
 tallies.out
 tallies.xml
+
+**/materials_fixed.xml
