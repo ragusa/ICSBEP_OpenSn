@@ -11,8 +11,8 @@ from typing import Deque, List, Optional, Tuple
 
 
 # -------------------- User-editable range (1-based, inclusive) --------------------
-START_CASE_NUM = 6
-END_CASE_NUM = 7  # None means "last found"
+START_CASE_NUM = 1
+END_CASE_NUM = None  # None means "last found"
 
 # Only forward these child lines to the console (everything else is hidden)
 FORWARD_PREFIXES = ("TIMING:", "ERROR:", "WARN:")

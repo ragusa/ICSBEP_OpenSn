@@ -38,15 +38,20 @@ def discover_cases(spherical_cases_dir: Path):
     - filepaths: list[Path] to each radii.txt
     - all_radii: list[list[str]] parsed values per file
     """
-    filepaths, all_radii = [], []
+    cases = []
+
     for dirpath, _, filenames in os.walk(spherical_cases_dir):
         for filename in filenames:
             if filename == "radii.txt":
                 filepath = Path(dirpath) / filename
-                filepaths.append(filepath)
                 with open(filepath, "r") as f:
                     radii = [line.strip() for line in f if line.strip()]
-                all_radii.append(radii)
+                cases.append((filepath, radii))
+
+    cases.sort(key=lambda x: str(x[0]).lower())
+
+    filepaths = [fp for fp, _ in cases]
+    all_radii = [radii for _, radii in cases]
     return filepaths, all_radii
 
 def main():
@@ -68,8 +73,8 @@ def main():
     filepaths, all_radii = discover_cases(spherical_cases_dir)
 
     # Optional: narrow to a specific case (keep or remove as desired)
-    #filepaths = filepaths[2:3]
-    #all_radii = all_radii[2:3]
+    #filepaths = filepaths[0:1]
+    #all_radii = all_radii[0:1]
 
     # Concurrency
     max_workers_env = os.getenv("MAX_WORKERS")
@@ -79,6 +84,16 @@ def main():
     futures = {}
     completed = 0
     total = len(filepaths)
+
+    # Optional: narrow to a specific case (keep or remove as desired)
+    #filepaths = filepaths[0:1]
+    #all_radii = all_radii[0:1]
+    filtered = [
+        (fp, radii)
+        for fp, radii in zip(filepaths, all_radii)
+        if "heu-sol-therm-010/case-1/" in str(fp)
+    ]
+    #filepaths, all_radii = zip(*filtered) if filtered else ([], [])
 
     def log_failure(line: str):
         with open(fail_log_path, "a") as f:
