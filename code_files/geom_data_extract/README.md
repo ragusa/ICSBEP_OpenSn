@@ -2,12 +2,12 @@
 
 ## Extraction Process
 
-Use the [geometry extraction script](./duplicate_folder_struct_for_mesh.py) to scan your OpenMC dataset and create a mirrored mesh tree containing only cases with exclusively spherical geometry. A [spherical_results.pkl](./spherical_results.pkl) file will be created with a list of result dictionaries.
+Use the [spherical case extraction script](./duplicate_spherical_cases.py) to scan your OpenMC dataset and create a mirrored mesh tree containing only cases with exclusively spherical geometry. A [spherical_results.pkl](./spherical_results.pkl) file will be created with a list of result dictionaries.
 
 ## How to Run
 
 - Run the script from this folder:
-  python3 [duplicate_folder_struct_for_mesh.py](./duplicate_folder_struct_for_mesh.py)
+  python3 [duplicate_spherical_cases.py](./duplicate_spherical_cases.py)
 
 ## Outputs
 

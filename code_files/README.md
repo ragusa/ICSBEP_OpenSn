@@ -1,18 +1,21 @@
-# code_files
+# Python Code Files
 
 Folder neatly containing all code required for modeling criticality benchmarks
 
 ## End-to-end workflow
 
-1) Discover spherical cases  
-   Run [duplicate_folder_struct_for_mesh.py](./geom_data_extract/duplicate_folder_struct_for_mesh.py) from [geom_data_extract](./geom_data_extract/README.md) to mirror only purely spherical cases and write radii.txt per case.
+1) Discover and compile spherical cases  
+   Run [duplicate_spherical_cases.py](./geom_data_extract/duplicate_spherical_cases.py) from [geom_data_extract](./geom_data_extract/README.md) to create a organized folder of only purely spherical cases and their needed data.
 
 2) Mesh the cases  
-   Run [Create_ICSBEP_Meshes.py](./gmsh_code/Create_ICSBEP_Meshes.py) from [gmsh_code](./gmsh_code/README.md) to generate a mesh for each found case.
+   Run [Create_ICSBEP_Meshes.py](./gmsh_code/Create_ICSBEP_Meshes.py) from [gmsh_code](./gmsh_code/README.md) to generate a mesh for each case.
 
-3) Stage materials  
-   Run [extract_material.py](./mat_extract/extract_material.py) from [mat_extract](./mat_extract/README.md) to generate a material file for each mesh.
+3) Generate material cross sections
+   Run [generate_material_mgxs.py](./mat_extract/generate_material_mgxs.py) from [mat_extract](./mat_extract/README.md) to generate multigroup cross section data for each case.
 
+4) Produce OpenSn scripts 
+   Run [opensn_gen.py](./opensn/opensn_gen.py) from [opensn](./opensn/README.md) to generate python scripts that can be run with OpenSn to get results for each case.
+   Run [run_opensn_scripts.py](./opensn/orun_opensn_scripts.py) from [opensn](./opensn/README.md) to run OpenSn using the generated scripts.
 
 ## Troubleshooting
 
